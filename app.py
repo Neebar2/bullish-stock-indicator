@@ -1,0 +1,98 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+st.set_page_config(page_title="Top 20 Bullish Stocks", layout="wide")
+
+# Native RSI Calculation (no extra libraries needed)
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+@st.cache_data(ttl=86400)
+def get_daily_scan(date_string):
+    tickers = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "AVGO", "ADBE", "NFLX",
+        "AMD", "COST", "CRM", "QCOM", "INTU", "AMAT", "MU", "TXN", "INTC", "AMGN",
+        "HON", "LRCX", "VRTX", "SBUX", "MDLZ", "ISRG", "GILD", "REGN", "ADI", "BKNG",
+        "PANW", "SNPS", "CDNS", "CSX", "PYPL", "ASML", "MELI", "MAR", "ORLY", "CTAS",
+        "KLAC", "NXPI", "MNST", "ADSK", "KDP", "LULU", "PAYX", "ROST", "IDXX", "EXC",
+        "LLY", "JPM", "V", "MA", "UNH", "HD", "PG", "JNJ", "XOM", "CVX", "WMT", "BAC",
+        "ABBV", "KO", "PEP", "ORCL", "TMO", "DHR", "MCD", "ACN", "ABT",
+        "DIS", "PFE", "VZ", "WFC", "SCHW", "CAT", "UPS", "NEE", "BMY", "RTX",
+        "BA", "AXP", "LOW", "COP", "IBM", "DE", "GE", "GS", "PLTR", "UBER", "SQ", "SHOP",
+        "DKNG", "COIN", "MSTR", "HOOD", "AI"
+    ]
+    
+    results = []
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+    
+    for i, ticker in enumerate(tickers):
+        try:
+            status_text.text(f"Scanning {ticker}... ({i+1}/{len(tickers)})")
+            
+            df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+            
+            if df is None or len(df) < 200:
+                continue
+            
+            # Manual indicator calculations using standard Pandas
+            df['SMA50'] = df['Close'].rolling(window=50).mean()
+            df['SMA200'] = df['Close'].rolling(window=200).mean()
+            df['RSI'] = calculate_rsi(df['Close'])
+            
+            curr = df.iloc[-1]
+            prev_3m = df.iloc[-63] if len(df) >= 63 else df.iloc[0]
+            prev_day = df.iloc[-2]
+
+            price = float(curr['Close'])
+            sma50 = float(curr['SMA50'])
+            sma200 = float(curr['SMA200'])
+            rsi = float(curr['RSI'])
+            three_month_ret = ((price - float(prev_3m['Close'])) / float(prev_3m['Close'])) * 100
+            daily_change = ((price - float(prev_day['Close'])) / float(prev_day['Close'])) * 100
+
+            # BULLISH LOGIC: Price > 50MA > 200MA + Momentum
+            if price > sma50 > sma200 and three_month_ret > 0:
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(price, 2),
+                    "3M Return %": round(three_month_ret, 2),
+                    "RSI": round(rsi, 2),
+                    "Daily %": round(daily_change, 2)
+                })
+        except:
+            continue
+        finally:
+            progress_bar.progress((i + 1) / len(tickers))
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    if not results:
+        return pd.DataFrame()
+        
+    df_final = pd.DataFrame(results)
+    return df_final.sort_values(by="3M Return %", ascending=False).head(20)
+
+# --- UI ---
+st.title("📈 Top 20 Bullish Stocks")
+st.write("Displays stocks in a long-term uptrend (Price > 50MA > 200MA) with positive 3-month momentum.")
+
+today_date = datetime.now().strftime('%Y-%m-%d')
+data = get_daily_scan(today_date)
+
+if not data.empty:
+    st.dataframe(data, use_container_width=True, hide_index=True)
+else:
+    st.write("No stocks currently meet the criteria. Check again after the next market close.")
+
+if st.button('Refresh Data'):
+    st.cache_data.clear()
+    st.rerun()
