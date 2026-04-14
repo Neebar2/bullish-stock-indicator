@@ -2,13 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-import time
 
 st.set_page_config(page_title="Stock Trend Dashboard", layout="wide")
 
 @st.cache_data(ttl=86400)
 def get_market_data(date_string):
-    # List of 100 stocks
     tickers = [
         "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "AVGO", "ADBE", "NFLX",
         "AMD", "COST", "CRM", "QCOM", "INTU", "AMAT", "MU", "TXN", "INTC", "AMGN",
@@ -22,22 +20,22 @@ def get_market_data(date_string):
         "DKNG", "COIN", "MSTR", "HOOD", "AI"
     ]
     
+    # 1. BULK DOWNLOAD (Fixes the Rate Limit Error)
+    # We download all tickers at once in one big dataframe
+    with st.spinner('Downloading market data...'):
+        data = yf.download(tickers, period="7mo", interval="1d", group_by='ticker', progress=False)
+
     bullish_results = []
     all_stocks_list = []
-    
-    status_text = st.empty()
-    progress_bar = st.progress(0)
-    
-    for i, ticker in enumerate(tickers):
+
+    # 2. PROCESS DATA LOCALLY
+    for ticker in tickers:
         try:
-            status_text.text(f"Analyzing {ticker}... ({i+1}/{len(tickers)})")
+            # Extract ticker-specific dataframe
+            df = data[ticker].copy()
+            df.dropna(inplace=True)
             
-            # Rate limit protection: small sleep
-            time.sleep(0.1) 
-            
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
-            
-            if df is None or len(df) < 50:
+            if len(df) < 50:
                 continue
             
             # Calculations
@@ -45,8 +43,8 @@ def get_market_data(date_string):
             df['SMA50'] = df['Close'].rolling(window=50).mean()
             
             curr = df.iloc[-1]
-            prev_2w = df.iloc[-10] if len(df) >= 10 else df.iloc[0]
-            prev_4w = df.iloc[-20] if len(df) >= 20 else df.iloc[0]
+            prev_2w = df.iloc[-10] 
+            prev_4w = df.iloc[-20]
             
             price = float(curr['Close'])
             sma20 = float(curr['SMA20'])
@@ -55,7 +53,6 @@ def get_market_data(date_string):
             two_week_ret = ((price - float(prev_2w['Close'])) / float(prev_2w['Close'])) * 100
             four_week_ret = ((price - float(prev_4w['Close'])) / float(prev_4w['Close'])) * 100
 
-            # Add to full list
             all_stocks_list.append({
                 "Ticker": ticker,
                 "Price": round(price, 2),
@@ -72,23 +69,16 @@ def get_market_data(date_string):
                     "2W Return %": round(two_week_ret, 2)
                 })
         except Exception:
-            continue # Skip failed tickers
-        finally:
-            progress_bar.progress((i + 1) / len(tickers))
+            continue
+
+    # Convert to DataFrames
+    df_bullish = pd.DataFrame(bullish_results)
+    if not df_bullish.empty:
+        df_bullish = df_bullish.sort_values(by="4W Return %", ascending=False).head(20)
     
-    status_text.empty()
-    progress_bar.empty()
-    
-    # SAFETY CHECK: If no stocks found, create empty dataframes with columns
-    if not bullish_results:
-        df_bullish = pd.DataFrame(columns=["Ticker", "Price", "4W Return %", "2W Return %"])
-    else:
-        df_bullish = pd.DataFrame(bullish_results).sort_values(by="4W Return %", ascending=False).head(20)
-        
-    if not all_stocks_list:
-        df_all = pd.DataFrame(columns=["Ticker", "Price", "2W Change %", "4W Change %"])
-    else:
-        df_all = pd.DataFrame(all_stocks_list).sort_values(by="Ticker")
+    df_all = pd.DataFrame(all_stocks_list)
+    if not df_all.empty:
+        df_all = df_all.sort_values(by="Ticker")
     
     return df_bullish, df_all
 
@@ -102,7 +92,7 @@ st.header("🔥 Top 20 Bullish Stocks (4-Week Trend)")
 if not bullish_df.empty:
     st.table(bullish_df)
 else:
-    st.warning("No stocks currently meet the bullish criteria or data is temporarily unavailable due to rate limits.")
+    st.warning("No stocks currently meet the bullish criteria.")
 
 st.divider()
 
@@ -110,7 +100,7 @@ st.header("📋 Full Market Snapshot (100 Stocks)")
 if not all_df.empty:
     st.dataframe(all_df, use_container_width=True, hide_index=True)
 else:
-    st.error("No market data available. Please wait 1 minute and click Refresh.")
+    st.error("Data unavailable. Try clicking Refresh.")
 
 if st.button('Refresh Data'):
     st.cache_data.clear()
